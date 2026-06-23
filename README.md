@@ -52,3 +52,4 @@ The core of the system is built around the ESP32 microcontroller, which manages 
 ---
 **Author:** Awele Bonaventure Ugbah
 *Chief Technology Officer, Conrad Robotics*
+# Smart-Energy-Audit-ESP32

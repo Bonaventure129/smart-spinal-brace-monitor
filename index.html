@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="light">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Clinical Posture Monitor | Conrad Robotics</title>
+    
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    
+    <style>
+        :root[data-theme="light"] { 
+            --bg: #f8fafc; --card: #ffffff; --text-main: #0f172a; --text-muted: #64748b;
+            --primary: #0284c7; --border: #e2e8f0; --bar-bg: #e2e8f0;
+        }
+        :root[data-theme="dark"] { 
+            --bg: #0f172a; --card: #1e293b; --text-main: #f8fafc; --text-muted: #94a3b8;
+            --primary: #38bdf8; --border: #334155; --bar-bg: #334155;
+        }
+        
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text-main); margin: 0; padding: 20px; transition: background 0.3s, color 0.3s; }
+        
+        .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--border); padding-bottom: 15px; margin-bottom: 20px; }
+        .header-controls { display: flex; gap: 15px; align-items: center; }
+        
+        button { background: var(--primary); color: #fff; border: none; padding: 10px 15px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: 0.2s; }
+        button:hover { opacity: 0.8; }
+        .btn-theme { background: transparent; border: 2px solid var(--primary); color: var(--primary); }
+        
+        .date-picker { padding: 9px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text-main); outline: none; }
+        
+        .grid-top { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+        .grid-main { display: grid; grid-template-columns: 1fr 2fr; gap: 20px; }
+        
+        .card { background: var(--card); padding: 25px; border-radius: 16px; box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1); border: 1px solid var(--border); transition: background 0.3s; }
+        .card h3 { margin: 0 0 15px 0; color: var(--text-muted); font-size: 0.9rem; text-transform: uppercase; letter-spacing: 0.05em; }
+        
+        .pressure-bar { width: 100%; height: 20px; background: var(--bar-bg); border-radius: 10px; overflow: hidden; }
+        .pressure-fill { height: 100%; background: var(--primary); width: 0%; transition: width 0.3s ease-out; }
+        
+        #spine-container { width: 100%; height: 400px; background: var(--bg); border-radius: 12px; border: 1px solid var(--border); }
+        .chart-container { position: relative; height: 400px; width: 100%; }
+        .status-badge { display: inline-block; padding: 8px 16px; border-radius: 20px; font-weight: bold; font-size: 1.5rem; }
+    </style>
+</head>
+<body>
+
+    <div class="header">
+        <div>
+            <h1 style="margin: 0; font-size: 1.8rem;">Clinical Posture Monitor</h1>
+            <span id="mqtt-status" style="color: #f59e0b; font-size: 0.85rem; font-weight: bold;">CONNECTING TO TELEMETRY...</span>
+        </div>
+        <div class="header-controls">
+            <button class="btn-theme" onclick="toggleTheme()">🌗 Toggle Theme</button>
+            <input type="date" id="logDate" class="date-picker">
+            <button onclick="downloadLog()">⬇ SD Log</button>
+            <button onclick="calibrateSensors()" style="background: #475569; color: white;">⌖ Set Zero Baseline</button>
+        </div>
+    </div>
+    
+    <div class="grid-top">
+        <div class="card">
+            <h3>Upper Tension (FSR 1)</h3>
+            <h2 id="fsr1-val" style="margin: 0 0 10px 0; font-size: 1.8rem;">0</h2>
+            <div class="pressure-bar"><div class="pressure-fill" id="fsr1-fill"></div></div>
+        </div>
+        <div class="card" style="text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+            <h3>Patient Compliance</h3>
+            <div id="compliance-status" class="status-badge" style="background: var(--bar-bg); color: var(--text-muted);">WAITING</div>
+            <p id="wear-time" style="margin: 15px 0 0 0; font-weight: bold; color: var(--text-muted);">Session Wear Time: 0 mins</p>
+        </div>
+        <div class="card">
+            <h3>Lower Tension (FSR 2)</h3>
+            <h2 id="fsr2-val" style="margin: 0 0 10px 0; font-size: 1.8rem;">0</h2>
+            <div class="pressure-bar"><div class="pressure-fill" id="fsr2-fill"></div></div>
+        </div>
+    </div>
+
+    <div class="grid-main">
+        <div class="card" style="padding: 15px;">
+            <h3 style="margin: 10px 10px 15px 10px;">3D Torso Alignment</h3>
+            <div id="spine-container"></div>
+        </div>
+        <div class="card">
+            <h3>Dynamic Pitch Telemetry (Radians)</h3>
+            <div class="chart-container"><canvas id="postureChart"></canvas></div>
+        </div>
+    </div>
+
+    <script>
+        // Theme Toggle
+        function toggleTheme() {
+            const html = document.documentElement;
+            html.setAttribute('data-theme', html.getAttribute('data-theme') === 'light' ? 'dark' : 'light');
+        }
+
+        // ==========================================
+        // 1. THREE.JS: SMOOTHED HIERARCHICAL TORSO
+        // ==========================================
+        const container = document.getElementById('spine-container');
+        const scene = new THREE.Scene();
+        const camera = new THREE.PerspectiveCamera(45, container.clientWidth / container.clientHeight, 0.1, 1000);
+        const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+        renderer.setSize(container.clientWidth, container.clientHeight);
+        container.appendChild(renderer.domElement);
+
+        const light = new THREE.DirectionalLight(0xffffff, 1.0); light.position.set(5, 10, 7); scene.add(light);
+        scene.add(new THREE.AmbientLight(0x888888));
+
+        const matChest = new THREE.MeshPhongMaterial({ color: 0x38bdf8 }); 
+        const matAbdomen = new THREE.MeshPhongMaterial({ color: 0x818cf8 });
+        const matPelvis = new THREE.MeshPhongMaterial({ color: 0x94a3b8 });
+        
+        const pelvisGroup = new THREE.Group(); const pelvisMesh = new THREE.Mesh(new THREE.BoxGeometry(3.5, 2.0, 1.5), matPelvis);
+        pelvisMesh.position.y = 1.0; pelvisGroup.add(pelvisMesh); scene.add(pelvisGroup); pelvisGroup.position.y = -4; 
+
+        const abGroup = new THREE.Group(); const abMesh = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.0, 1.4), matAbdomen);
+        abMesh.position.y = 1.0; abGroup.add(abMesh); abGroup.position.y = 2.2; pelvisGroup.add(abGroup);
+
+        const chestGroup = new THREE.Group(); const chestMesh = new THREE.Mesh(new THREE.BoxGeometry(3.8, 2.2, 1.6), matChest);
+        chestMesh.position.y = 1.1; chestGroup.add(chestMesh); chestGroup.position.y = 2.2; abGroup.add(chestGroup);
+
+        camera.position.z = 16; camera.position.y = 1;
+
+        // Target rotations for LERP smoothing
+        let t_pX = 0, t_pZ = 0, t_aX = 0, t_aZ = 0, t_cX = 0, t_cZ = 0;
+
+        function lerp(start, end, factor) { return start + (end - start) * factor; }
+
+        function animate() { 
+            requestAnimationFrame(animate); 
+            // Apply smoothing so it doesn't snap chaotically!
+            pelvisGroup.rotation.x = lerp(pelvisGroup.rotation.x, t_pX, 0.1);
+            pelvisGroup.rotation.z = lerp(pelvisGroup.rotation.z, t_pZ, 0.1);
+            abGroup.rotation.x = lerp(abGroup.rotation.x, t_aX, 0.1);
+            abGroup.rotation.z = lerp(abGroup.rotation.z, t_aZ, 0.1);
+            chestGroup.rotation.x = lerp(chestGroup.rotation.x, t_cX, 0.1);
+            chestGroup.rotation.z = lerp(chestGroup.rotation.z, t_cZ, 0.1);
+            renderer.render(scene, camera); 
+        }
+        animate();
+
+        // ==========================================
+        // 2. CHART.JS
+        // ==========================================
+        const ctx = document.getElementById('postureChart').getContext('2d');
+        const postureChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: Array(30).fill(''),
+                datasets: [
+                    { label: 'Upper (MPU1)', borderColor: '#38bdf8', data: Array(30).fill(0), tension: 0.4 },
+                    { label: 'Mid (MPU2)', borderColor: '#818cf8', data: Array(30).fill(0), tension: 0.4 },
+                    { label: 'Lower (MPU3)', borderColor: '#94a3b8', data: Array(30).fill(0), tension: 0.4 }
+                ]
+            },
+            options: { responsive: true, maintainAspectRatio: false, animation: { duration: 0 }, scales: { y: { suggestedMin: -0.5, suggestedMax: 0.5 }, x: { display: false } } }
+        });
+
+        function updateChart(m1, m2, m3) {
+            postureChart.data.datasets[0].data.push(m1); postureChart.data.datasets[0].data.shift();
+            postureChart.data.datasets[1].data.push(m2); postureChart.data.datasets[1].data.shift();
+            postureChart.data.datasets[2].data.push(m3); postureChart.data.datasets[2].data.shift();
+            postureChart.update();
+        }
+
+        // ==========================================
+        // 3. MQTT LOGIC
+        // ==========================================
+        const statusText = document.getElementById('mqtt-status');
+        const telemetryTopic = "conrad/brace/telemetry";
+        
+        const client = new Paho.MQTT.Client("broker.hivemq.com", 8000, "/mqtt", "med_web_" + Math.random().toString(16).substr(2, 8));
+        
+        client.onConnectionLost = function() {
+            statusText.innerText = "SYSTEM DISCONNECTED"; statusText.style.color = "var(--danger)";
+            setTimeout(connectMQTT, 3000);
+        };
+
+        client.onMessageArrived = function(message) {
+            if(message.destinationName === telemetryTopic) {
+                const data = JSON.parse(message.payloadString);
+                
+                document.getElementById('fsr1-fill').style.width = Math.min((data.fsr1 / 4095 * 100), 100) + '%';
+                document.getElementById('fsr1-val').innerText = data.fsr1;
+                document.getElementById('fsr2-fill').style.width = Math.min((data.fsr2 / 4095 * 100), 100) + '%';
+                document.getElementById('fsr2-val').innerText = data.fsr2;
+
+                const hrs = Math.floor(data.wear_time / 3600);
+                const mins = Math.floor((data.wear_time % 3600) / 60);
+                document.getElementById('wear-time').innerText = `Session Wear Time: ${hrs}h ${mins}m`;
+
+                if(data.worn) updateChart(data.mpu1_pitch, data.mpu2_pitch, data.mpu3_pitch);
+
+                const statusEl = document.getElementById('compliance-status');
+                
+                if (data.worn) {
+                    if (data.compliant) {
+                        statusEl.innerText = "COMPLIANT"; statusEl.style.background = "#d1fae5"; statusEl.style.color = "#059669";
+                    } else {
+                        statusEl.innerText = "BAD POSTURE"; statusEl.style.background = "#fee2e2"; statusEl.style.color = "#dc2626";
+                    }
+                    // Set targets for 3D LERP smoothing
+                    t_pX = data.mpu3_pitch || 0; t_pZ = data.mpu3_roll || 0;
+                    t_aX = (data.mpu2_pitch - data.mpu3_pitch) || 0; t_aZ = (data.mpu2_roll - data.mpu3_roll) || 0;
+                    t_cX = (data.mpu1_pitch - data.mpu2_pitch) || 0; t_cZ = (data.mpu1_roll - data.mpu2_roll) || 0;
+                } else {
+                    statusEl.innerText = "BRACE REMOVED"; statusEl.style.background = "var(--bar-bg)"; statusEl.style.color = "var(--text-muted)";
+                    t_pX = 0; t_pZ = 0; t_aX = 0; t_aZ = 0; t_cX = 0; t_cZ = 0;
+                }
+            }
+        };
+
+        function connectMQTT() {
+            client.connect({ 
+                onSuccess: () => { statusText.innerText = "● LIVE TELEMETRY SECURE"; statusText.style.color = "var(--primary)"; client.subscribe(telemetryTopic); },
+                onFailure: () => setTimeout(connectMQTT, 3000)
+            });
+        }
+        connectMQTT();
+
+        function calibrateSensors() {
+            const msg = new Paho.MQTT.Message('{"cmd":"calibrate"}');
+            msg.destinationName = "conrad/brace/command";
+            client.send(msg);
+            alert("Calibration Command Sent. Stand in perfect posture for 2 seconds.");
+        }
+
+        // ==========================================
+        // 4. SECURE SD DOWNLOADER
+        // ==========================================
+        async function downloadLog() {
+            const dateStr = document.getElementById('logDate').value;
+            if(!dateStr) return alert('Please select a date from the calendar first.');
+
+            try {
+                // Check if user is on the Conrad WiFi network
+                const res = await fetch("http://conradbrace.local/ping");
+                if (res.ok) window.open(`http://conradbrace.local/download?date=${dateStr}`, '_blank');
+            } catch (err) {
+                alert("NETWORK ERROR: You must be connected to the 'CONRAD10' WiFi network to download local SD files.");
+            }
+        }
+    </script>
+</body>
+</html>
