@@ -96,8 +96,8 @@ const float MPU1_PITCH_SIGN = 1.0f;
 const float MPU1_ROLL_SIGN  = 1.0f;
 const float MPU2_PITCH_SIGN = 1.0f;   // <-- adjust if MPU2 is inverted
 const float MPU2_ROLL_SIGN  = 1.0f;
-const float MPU3_PITCH_SIGN = 1.0f;
-const float MPU3_ROLL_SIGN  = 1.0f;
+const float MPU3_PITCH_SIGN = -1.0f;
+const float MPU3_ROLL_SIGN  = -1.0f;
 
 // -----------------------------------------
 // CALIBRATION DATA STRUCTURE
