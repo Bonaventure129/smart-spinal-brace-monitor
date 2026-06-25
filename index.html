@@ -22,9 +22,9 @@
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text-main); margin: 0; padding: 20px; transition: background 0.3s, color 0.3s; }
         
         .header { display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid var(--border); padding-bottom: 15px; margin-bottom: 20px; }
-        .header-controls { display: flex; gap: 15px; align-items: center; }
+        .header-controls { display: flex; gap: 10px; align-items: center; }
         
-        button { background: var(--primary); color: #fff; border: none; padding: 10px 15px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: 0.2s; }
+        button { background: var(--primary); color: #fff; border: none; padding: 10px 15px; border-radius: 8px; font-weight: 600; cursor: pointer; transition: 0.2s; white-space: nowrap;}
         button:hover { opacity: 0.8; }
         .btn-theme { background: transparent; border: 2px solid var(--primary); color: var(--primary); }
         
@@ -41,7 +41,16 @@
         
         #spine-container { width: 100%; height: 400px; background: var(--bg); border-radius: 12px; border: 1px solid var(--border); }
         .chart-container { position: relative; height: 400px; width: 100%; }
-        .status-badge { display: inline-block; padding: 8px 16px; border-radius: 20px; font-weight: bold; font-size: 1.5rem; }
+        .status-badge { display: inline-block; padding: 8px 16px; border-radius: 20px; font-weight: bold; font-size: 1.5rem; text-align: center;}
+
+        /* MOBILE RESPONSIVENESS */
+        @media (max-width: 900px) {
+            .header { flex-direction: column; gap: 15px; text-align: center; }
+            .header-controls { flex-wrap: wrap; justify-content: center; }
+            .grid-top { grid-template-columns: 1fr; }
+            .grid-main { grid-template-columns: 1fr; }
+            #spine-container, .chart-container { height: 300px; }
+        }
     </style>
 </head>
 <body>
@@ -52,10 +61,10 @@
             <span id="mqtt-status" style="color: #f59e0b; font-size: 0.85rem; font-weight: bold;">CONNECTING TO TELEMETRY...</span>
         </div>
         <div class="header-controls">
-            <button class="btn-theme" onclick="toggleTheme()">🌗 Toggle Theme</button>
+            <button class="btn-theme" onclick="toggleTheme()">🌗</button>
             <input type="date" id="logDate" class="date-picker">
             <button onclick="downloadLog()">⬇ SD Log</button>
-            <button onclick="calibrateSensors()" style="background: #475569; color: white;">⌖ Set Zero Baseline</button>
+            <button onclick="calibrateSensors()" style="background: #475569; color: white;">⌖ Zero Baseline</button>
         </div>
     </div>
     
@@ -65,7 +74,7 @@
             <h2 id="fsr1-val" style="margin: 0 0 10px 0; font-size: 1.8rem;">0</h2>
             <div class="pressure-bar"><div class="pressure-fill" id="fsr1-fill"></div></div>
         </div>
-        <div class="card" style="text-align: center; display: flex; flex-direction: column; align-items: center; justify-content: center;">
+        <div class="card" style="display: flex; flex-direction: column; align-items: center; justify-content: center;">
             <h3>Patient Compliance</h3>
             <div id="compliance-status" class="status-badge" style="background: var(--bar-bg); color: var(--text-muted);">WAITING</div>
             <p id="wear-time" style="margin: 15px 0 0 0; font-weight: bold; color: var(--text-muted);">Session Wear Time: 0 mins</p>
@@ -137,6 +146,12 @@
         }
         animate();
 
+        window.addEventListener('resize', () => {
+            camera.aspect = container.clientWidth / container.clientHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(container.clientWidth, container.clientHeight);
+        });
+
         // ==========================================
         // 2. CHART.JS
         // ==========================================
@@ -162,12 +177,11 @@
         }
 
         // ==========================================
-        // 3. SECURE MQTT LOGIC (GITHUB PAGES FIX)
+        // 3. SECURE MQTT LOGIC
         // ==========================================
         const statusText = document.getElementById('mqtt-status');
         const telemetryTopic = "conrad/brace/telemetry";
         
-        // CRITICAL FIX: Port changed from 8000 to 8884 for secure WebSocket transmission
         const client = new Paho.MQTT.Client("broker.hivemq.com", 8884, "/mqtt", "med_web_" + Math.random().toString(16).substr(2, 8));
         
         client.onConnectionLost = function() {
@@ -210,7 +224,7 @@
 
         function connectMQTT() {
             client.connect({ 
-                useSSL: true, // CRITICAL FIX: Forces HTTPS connections to succeed on GitHub Pages
+                useSSL: true,
                 onSuccess: () => { statusText.innerText = "● LIVE TELEMETRY SECURE"; statusText.style.color = "var(--primary)"; client.subscribe(telemetryTopic); },
                 onFailure: () => setTimeout(connectMQTT, 3000)
             });
@@ -225,18 +239,19 @@
         }
 
         // ==========================================
-        // 4. SECURE SD DOWNLOADER
+        // 4. BROWSER-SAFE SD DOWNLOADER
         // ==========================================
-        async function downloadLog() {
+        function downloadLog() {
             const dateStr = document.getElementById('logDate').value;
-            if(!dateStr) return alert('Please select a date from the calendar first.');
-
-            try {
-                const res = await fetch("http://conradbrace.local/ping");
-                if (res.ok) window.open(`http://conradbrace.local/download?date=${dateStr}`, '_blank');
-            } catch (err) {
-                alert("NETWORK ERROR: You must be connected to the 'CONRAD10' WiFi network to download local SD files.");
+            if(!dateStr) {
+                alert('Please select a date from the calendar first.');
+                return;
             }
+
+            // By opening directly in a new tab, we bypass the browser's HTTPS->HTTP Mixed Content block.
+            // If the user isn't on the same network, the new tab will simply show a native "Site cannot be reached" error.
+            alert("Attempting to connect to the hardware...\n\nMake sure your device is connected to the same WiFi network as the brace. If the file fails to download, please check your network connection.");
+            window.open(`http://conradbrace.local/download?date=${dateStr}`, '_blank');
         }
     </script>
 </body>
