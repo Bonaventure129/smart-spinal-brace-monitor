@@ -198,99 +198,180 @@ function toggleTheme() {
 }
 
 // ================================================================
-// 1. THREE.JS — HIERARCHICAL TORSO
+// 1. THREE.JS — ANATOMICAL TORSO (v3)
 //
-// HOW THE 3D MODEL WORKS (v2):
-//  The firmware now sends delta_pitch and delta_roll in a UNIFIED
-//  body frame — all sensors agree on direction after calibration.
+// KEY IMPROVEMENTS over v2:
+//  • Isometric-style camera (angled 25° from front, elevated 15°)
+//    so the body has visible depth and 3D perspective at rest
+//  • Anatomical shapes: tapered chest with shoulder wings,
+//    narrowed waist abdomen, wider pelvis hips
+//  • Rounded CylinderGeometry segments for organic look
+//  • Spine line of yellow spheres down the back
+//  • Two shoulder "arm stubs" on the chest for human silhouette
+//  • Rim light from behind for edge definition
+//  • Alert colour: segments flash red when tolerance exceeded
+//  • VISUAL_SCALE increased so small real angles look clear
 //
-//  Mapping to Three.js:
-//    pitch (forward-bend) → rotation around X axis  (negative = bend fwd)
-//    roll  (left-right)   → rotation around Z axis  (positive = lean right)
-//
-//  The three body segments are driven hierarchically:
-//    pelvisGroup  → driven by MPU3 (lumbar)   — absolute
-//    abGroup      → driven by MPU2 (thoracolumbar) — RELATIVE to pelvis
-//    chestGroup   → driven by MPU1 (thoracic) — RELATIVE to abdomen
-//
-//  By using relative rotations, when the whole body bends, all
-//  segments move together as a single unit (which is correct physics).
-//  Each segment only shows the CURVATURE at that spinal level.
-//
-//  IMPORTANT: since the firmware subtracts the calibration pose,
-//  zero delta = upright regardless of how the sensor was mounted.
+// HIERARCHY (unchanged from v2 — physics still correct):
+//  pelvisGroup  → MPU3 absolute
+//  abGroup      → MPU2 relative to pelvis
+//  chestGroup   → MPU1 relative to abdomen
 // ================================================================
 const container = document.getElementById('spine-container');
-const scene    = new THREE.Scene();
-const camera   = new THREE.PerspectiveCamera(42, container.clientWidth / container.clientHeight, 0.1, 1000);
-const renderer = new THREE.WebGLRenderer({ alpha: true, antialias: true });
+const scene     = new THREE.Scene();
+const camera    = new THREE.PerspectiveCamera(38, container.clientWidth / container.clientHeight, 0.1, 1000);
+const renderer  = new THREE.WebGLRenderer({ alpha: true, antialias: true });
 renderer.setSize(container.clientWidth, container.clientHeight);
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.shadowMap.enabled = true;
 container.appendChild(renderer.domElement);
 
-const light = new THREE.DirectionalLight(0xffffff, 1.0);
-light.position.set(5, 10, 7);
-scene.add(light);
-scene.add(new THREE.AmbientLight(0x888888));
+// --- Lighting rig ---
+// Key light (front-top-right)
+const keyLight = new THREE.DirectionalLight(0xffffff, 1.1);
+keyLight.position.set(6, 12, 8);
+scene.add(keyLight);
+// Fill light (left side, softer)
+const fillLight = new THREE.DirectionalLight(0xadd8ff, 0.45);
+fillLight.position.set(-8, 4, 3);
+scene.add(fillLight);
+// Rim light (from behind, gives edge glow)
+const rimLight = new THREE.DirectionalLight(0xffffff, 0.35);
+rimLight.position.set(0, 5, -12);
+scene.add(rimLight);
+// Ambient (base floor fill)
+scene.add(new THREE.AmbientLight(0x667788, 0.6));
 
-// Materials
-const matChest   = new THREE.MeshPhongMaterial({ color: 0x38bdf8, shininess: 60 });
-const matAbdomen = new THREE.MeshPhongMaterial({ color: 0x818cf8, shininess: 60 });
-const matPelvis  = new THREE.MeshPhongMaterial({ color: 0x94a3b8, shininess: 60 });
-const matAlertC  = new THREE.MeshPhongMaterial({ color: 0xf87171, shininess: 60 });
-const matAlertA  = new THREE.MeshPhongMaterial({ color: 0xf87171, shininess: 60 });
-const matAlertP  = new THREE.MeshPhongMaterial({ color: 0xf87171, shininess: 60 });
+// --- Materials ---
+// Normal colours
+const matChest   = new THREE.MeshPhongMaterial({ color: 0x0ea5e9, shininess: 80, specular: 0x224466 });
+const matAbdomen = new THREE.MeshPhongMaterial({ color: 0x6366f1, shininess: 80, specular: 0x221133 });
+const matPelvis  = new THREE.MeshPhongMaterial({ color: 0x64748b, shininess: 60, specular: 0x111122 });
+const matSpine   = new THREE.MeshPhongMaterial({ color: 0xfbbf24, shininess: 100, specular: 0x443300 });
+const matShould  = new THREE.MeshPhongMaterial({ color: 0x0284c7, shininess: 50 });
+const matNeck    = new THREE.MeshPhongMaterial({ color: 0xe0c8a0, shininess: 30 });
+const matHead    = new THREE.MeshPhongMaterial({ color: 0xe8d5b0, shininess: 20 });
+// Alert colour (swapped in when posture bad)
+const matChestBad   = new THREE.MeshPhongMaterial({ color: 0xef4444, shininess: 80 });
+const matAbdomenBad = new THREE.MeshPhongMaterial({ color: 0xef4444, shininess: 80 });
+const matPelvisBad  = new THREE.MeshPhongMaterial({ color: 0xef4444, shininess: 80 });
 
-// Hierarchical groups (child rotations are relative to parent)
-// pelvisGroup → abGroup → chestGroup  (each is a child of the one above)
+// --- PELVIS GROUP (MPU3 / Lumbar) ---
 const pelvisGroup = new THREE.Group();
-const pelvisMesh  = new THREE.Mesh(new THREE.BoxGeometry(3.5, 2.0, 1.5), matPelvis);
-pelvisMesh.position.y = 1.0;
-pelvisGroup.add(pelvisMesh);
-pelvisGroup.position.y = -4;
+pelvisGroup.position.y = -4.5;
 scene.add(pelvisGroup);
 
+// Pelvis: wide hips (flared cylinder)
+const pelvisMesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(2.2, 2.5, 2.0, 16),
+    matPelvis
+);
+pelvisMesh.position.y = 1.0;
+pelvisGroup.add(pelvisMesh);
+
+// Spine node L3
+const spineL3 = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 10), matSpine);
+spineL3.position.set(0, 2.1, -0.7);
+pelvisGroup.add(spineL3);
+
+// --- ABDOMEN GROUP (MPU2 / Thoracolumbar) — child of pelvisGroup ---
 const abGroup = new THREE.Group();
-const abMesh  = new THREE.Mesh(new THREE.BoxGeometry(3.0, 2.2, 1.4), matAbdomen);
-abMesh.position.y = 1.1;
-abGroup.add(abMesh);
-abGroup.position.y = 2.2;   // offset within pelvisGroup
+abGroup.position.y = 2.15;
 pelvisGroup.add(abGroup);
 
+// Abdomen: narrow waist
+const abMesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.55, 2.0, 2.4, 14),
+    matAbdomen
+);
+abMesh.position.y = 1.2;
+abGroup.add(abMesh);
+
+// Spine node T12
+const spineT12 = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 10), matSpine);
+spineT12.position.set(0, 0.05, -0.65);
+abGroup.add(spineT12);
+const spineT10 = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 10), matSpine);
+spineT10.position.set(0, 2.4, -0.62);
+abGroup.add(spineT10);
+
+// --- CHEST GROUP (MPU1 / Thoracic) — child of abGroup ---
 const chestGroup = new THREE.Group();
-const chestMesh  = new THREE.Mesh(new THREE.BoxGeometry(3.8, 2.4, 1.6), matChest);
-chestMesh.position.y = 1.2;
-chestGroup.add(chestMesh);
-chestGroup.position.y = 2.4;   // offset within abGroup
+chestGroup.position.y = 2.5;
 abGroup.add(chestGroup);
 
-// Connector joints (visual spine vertebrae)
-function makeJoint(color) {
-    const m = new THREE.Mesh(new THREE.SphereGeometry(0.35, 12, 12),
-                             new THREE.MeshPhongMaterial({ color, shininess: 80 }));
-    return m;
+// Chest: broad thorax (slightly tapered upward)
+const chestMesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(1.9, 1.65, 2.6, 14),
+    matChest
+);
+chestMesh.position.y = 1.3;
+chestGroup.add(chestMesh);
+
+// Shoulder wings (left and right arm stubs)
+function makeShoulderStub(side) {
+    const g = new THREE.Group();
+    // Clavicle
+    const clav = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.28, 1.6, 10), matShould);
+    clav.rotation.z = Math.PI / 2;
+    clav.position.set(side * 1.4, 2.5, 0);
+    g.add(clav);
+    // Upper arm stub
+    const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.4, 0.32, 1.2, 10), matShould);
+    arm.position.set(side * 2.5, 1.8, 0);
+    g.add(arm);
+    return g;
 }
-const joint1 = makeJoint(0xfbbf24); joint1.position.y = 0; abGroup.add(joint1);
-const joint2 = makeJoint(0xfbbf24); joint2.position.y = 0; chestGroup.add(joint2);
+chestGroup.add(makeShoulderStub(1));
+chestGroup.add(makeShoulderStub(-1));
 
-camera.position.z = 16;
-camera.position.y = 1;
+// Spine node T4
+const spineT4 = new THREE.Mesh(new THREE.SphereGeometry(0.24, 10, 10), matSpine);
+spineT4.position.set(0, 0.05, -0.6);
+chestGroup.add(spineT4);
+const spineT1 = new THREE.Mesh(new THREE.SphereGeometry(0.22, 10, 10), matSpine);
+spineT1.position.set(0, 2.55, -0.58);
+chestGroup.add(spineT1);
 
-// Smooth interpolation targets
+// Neck
+const neckMesh = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.5, 0.65, 0.9, 12),
+    matNeck
+);
+neckMesh.position.set(0, 2.9, 0);
+chestGroup.add(neckMesh);
+
+// Head
+const headMesh = new THREE.Mesh(
+    new THREE.SphereGeometry(0.85, 16, 16),
+    matHead
+);
+headMesh.position.set(0, 4.1, 0);
+chestGroup.add(headMesh);
+
+// --- CAMERA: isometric-style angle ---
+// Positioned front-right-above so we see the torso in 3D at rest
+camera.position.set(5, 3, 14);
+camera.lookAt(0, 1, 0);
+
+// --- Smooth interpolation targets ---
 let t_pX = 0, t_pZ = 0;
 let t_aX = 0, t_aZ = 0;
 let t_cX = 0, t_cZ = 0;
 
 function lerp(a, b, f) { return a + (b - a) * f; }
 
-// Alert state tracking for material swaps
-let alertState = { chest: false, ab: false, pelvis: false };
+// --- Alert state ---
+let isAlert = { chest: false, ab: false, pelvis: false };
+
+function setSegmentAlert(mesh, mat, matBad, isAlertOn) {
+    mesh.material = isAlertOn ? matBad : mat;
+}
 
 function animate() {
     requestAnimationFrame(animate);
-    const k = 0.08; // smoothing factor
+    const k = 0.09;
 
-    // Smooth to targets
     pelvisGroup.rotation.x = lerp(pelvisGroup.rotation.x, t_pX, k);
     pelvisGroup.rotation.z = lerp(pelvisGroup.rotation.z, t_pZ, k);
     abGroup.rotation.x     = lerp(abGroup.rotation.x,     t_aX, k);
@@ -407,45 +488,50 @@ function updateSensorCards(d) {
 // 4. 3D MODEL UPDATER
 //
 // COORDINATE MAPPING (firmware → Three.js):
-//   firmware delta_pitch (forward-bend, unified body frame)
-//     → negated rotation.x  (Three.js: +x tilts head back)
-//   firmware delta_roll (lean right, unified body frame)
-//     → negated rotation.z  (Three.js: +z tilts to left)
+//   delta_pitch > 0 = patient bending FORWARD
+//     → rotation.x negative  (Three.js front-bend = negative X)
+//   delta_roll > 0  = patient leaning RIGHT
+//     → rotation.z negative  (Three.js right-lean = negative Z)
 //
-// HIERARCHY:
-//   pelvisGroup.rotation ← MPU3 absolute tilt
-//   abGroup.rotation     ← MPU2 tilt MINUS MPU3 tilt  (relative curvature)
-//   chestGroup.rotation  ← MPU1 tilt MINUS MPU2 tilt  (relative curvature)
-//
-// This means the model will:
-//   • Tilt as a whole when the whole spine bends (pelvis-driven)
-//   • Show localised curves at each spinal level
+// VISUAL_SCALE: amplify so small real angles read clearly.
+//   0.26 rad = 15° real → 0.26 * 2.2 = 0.57 rad shown (~33°)
+//   This is intentional — clinically we want deviations visible.
 // ================================================================
 function update3DModel(d) {
     if (!d.worn) {
-        // Zero out everything when brace removed
         t_pX = 0; t_pZ = 0;
         t_aX = 0; t_aZ = 0;
         t_cX = 0; t_cZ = 0;
+        // Restore normal materials
+        pelvisMesh.material = matPelvis;
+        abMesh.material     = matAbdomen;
+        chestMesh.material  = matChest;
         return;
     }
 
-    // Scale factor: the MPU angles are in radians, Three.js uses radians too.
-    // A 0.26 rad (15°) bend should show clearly on the model.
-    // We can amplify slightly for visual clarity.
-    const VISUAL_SCALE = 1.2;
+    const VISUAL_SCALE = 2.2;  // amplify for visual clarity
 
-    // Pelvis (MPU3 absolute)
+    // Pelvis — MPU3 absolute tilt
     t_pX = -(d.mpu3_pitch * VISUAL_SCALE);
     t_pZ = -(d.mpu3_roll  * VISUAL_SCALE);
 
-    // Abdomen (MPU2 relative to MPU3 = curvature at thoracolumbar junction)
+    // Abdomen — MPU2 RELATIVE to pelvis (spinal curvature at T12/L1)
     t_aX = -((d.mpu2_pitch - d.mpu3_pitch) * VISUAL_SCALE);
     t_aZ = -((d.mpu2_roll  - d.mpu3_roll ) * VISUAL_SCALE);
 
-    // Chest (MPU1 relative to MPU2 = curvature at thoracic)
+    // Chest — MPU1 RELATIVE to abdomen (spinal curvature at T4-T8)
     t_cX = -((d.mpu1_pitch - d.mpu2_pitch) * VISUAL_SCALE);
     t_cZ = -((d.mpu1_roll  - d.mpu2_roll ) * VISUAL_SCALE);
+
+    // Per-segment alert colouring
+    const T = 0.26;
+    const p3bad = Math.abs(d.mpu3_pitch) > T || Math.abs(d.mpu3_roll) > T;
+    const p2bad = Math.abs(d.mpu2_pitch) > T || Math.abs(d.mpu2_roll) > T;
+    const p1bad = Math.abs(d.mpu1_pitch) > T || Math.abs(d.mpu1_roll) > T;
+
+    pelvisMesh.material = p3bad ? matPelvisBad  : matPelvis;
+    abMesh.material     = p2bad ? matAbdomenBad : matAbdomen;
+    chestMesh.material  = p1bad ? matChestBad   : matChest;
 }
 
 // ================================================================
@@ -479,9 +565,27 @@ client.onMessageArrived = function(message) {
     document.getElementById('fsr2-val').innerText = data.fsr2;
 
     // --- Wear time ---
-    const hrs  = Math.floor(data.wear_time / 3600);
-    const mins = Math.floor((data.wear_time % 3600) / 60);
-    document.getElementById('wear-time').innerText = `Session Wear Time: ${hrs}h ${mins}m`;
+    // wear_time is total seconds from firmware. It resets at midnight on the ESP32.
+    // We also track lastWearDate on the browser side as a safety fallback.
+    const wt   = data.wear_time;
+    const hrs  = Math.floor(wt / 3600);
+    const mins = Math.floor((wt % 3600) / 60);
+    const secs = wt % 60;
+    // Zero-pad minutes and seconds for readability
+    const mStr = String(mins).padStart(2, '0');
+    const sStr = String(secs).padStart(2, '0');
+    document.getElementById('wear-time').innerText = `Session Wear Time: ${hrs}h ${mStr}m ${sStr}s`;
+
+    // Browser-side daily reset guard (backs up the firmware's own daily reset)
+    const todayStr = new Date().toDateString();
+    if (window._lastWearDate && window._lastWearDate !== todayStr) {
+        // New day detected on browser side — wear_time should already be 0 from firmware
+        // but force the display to reflect that if MQTT was offline at midnight
+        if (wt > 3600 * 20) {  // sanity check: >20h means it likely didn't reset yet
+            document.getElementById('wear-time').innerText = `Session Wear Time: 0h 00m 00s`;
+        }
+    }
+    window._lastWearDate = todayStr;
 
     // --- Calibration overlay ---
     const calOverlay = document.getElementById('cal-overlay');
